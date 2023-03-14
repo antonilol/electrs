@@ -369,7 +369,7 @@ impl Rpc {
         })
     }
 
-    fn outpoint_subscribe(&self, client: &mut Client, (txid, vout): (Txid, u32)) -> Result<Value> {
+    fn outpoint_status(&self, client: &mut Client, (txid, vout): (Txid, u32), subscribe: bool) -> Result<Value> {
         let outpoint = OutPoint::new(txid, vout);
         Ok(match client.outpoints.entry(outpoint) {
             Entry::Occupied(e) => json!(e.get()),
@@ -378,7 +378,11 @@ impl Rpc {
                 let mut status = OutPointStatus::new(outpoint);
                 self.tracker
                     .update_outpoint_status(&mut status, &self.daemon)?;
-                json!(e.insert(status))
+                if subscribe {
+                    json!(e.insert(status))
+                } else {
+                    json!(&status)
+                }
             }
         })
     }
@@ -589,7 +593,8 @@ impl Rpc {
                 Params::Features => self.features(),
                 Params::HeadersSubscribe => self.headers_subscribe(client),
                 Params::MempoolFeeHistogram => self.get_fee_histogram(),
-                Params::OutPointSubscribe(args) => self.outpoint_subscribe(client, *args),
+                Params::OutPointStatus(args) => self.outpoint_status(client, *args, false),
+                Params::OutPointSubscribe(args) => self.outpoint_status(client, *args, true),
                 Params::OutPointUnsubscribe(args) => self.outpoint_unsubscribe(client, *args),
                 Params::PeersSubscribe => Ok(json!([])),
                 Params::Ping => Ok(Value::Null),
@@ -620,6 +625,7 @@ enum Params {
     Features,
     HeadersSubscribe,
     MempoolFeeHistogram,
+    OutPointStatus((Txid, u32)),
     OutPointSubscribe((Txid, u32)), // TODO: support spk_hint
     OutPointUnsubscribe((Txid, u32)),
     PeersSubscribe,
@@ -644,6 +650,7 @@ impl Params {
             "blockchain.block.headers" => Params::BlockHeaders(convert(params)?),
             "blockchain.estimatefee" => Params::EstimateFee(convert(params)?),
             "blockchain.headers.subscribe" => Params::HeadersSubscribe,
+            "blockchain.outpoint.status" => Params::OutPointStatus(convert(params)?),
             "blockchain.outpoint.subscribe" => Params::OutPointSubscribe(convert(params)?),
             "blockchain.outpoint.unsubscribe" => Params::OutPointUnsubscribe(convert(params)?),
             "blockchain.relayfee" => Params::RelayFee,
