@@ -555,7 +555,7 @@ fn filter_block_txs<T: Send>(
 pub(crate) struct OutPointStatus {
     outpoint: OutPoint,
     funding: Option<Height>,
-    spending: Option<(Txid, Height)>,
+    spending: Option<(Txid, u32, Height)>,
     tip: BlockHash,
 }
 
@@ -568,8 +568,9 @@ impl Serialize for OutPointStatus {
         if let Some(funding) = &self.funding {
             map.serialize_entry("height", &funding)?;
         }
-        if let Some((txid, height)) = &self.spending {
+        if let Some((txid, index, height)) = &self.spending {
             map.serialize_entry("spender_txhash", &txid)?;
+            map.serialize_entry("spender_vin", &index)?;
             map.serialize_entry("spender_height", &height)?;
         }
         map.end()
@@ -642,10 +643,10 @@ impl OutPointStatus {
         index: &Index,
         daemon: &Daemon,
         mempool: &Mempool,
-    ) -> Result<Option<(Txid, Height)>> {
+    ) -> Result<Option<(Txid, u32, Height)>> {
         let chain = index.chain();
         if !self.is_reorg(chain) {
-            if let Some((_, Height::Confirmed { .. })) = &self.spending {
+            if let Some((_, _, Height::Confirmed { .. })) = &self.spending {
                 return Ok(self.spending);
             }
         }
@@ -653,11 +654,15 @@ impl OutPointStatus {
         let mut confirmed = None;
         daemon.for_blocks(spending_blockhashes, |blockhash, block| {
             for tx in block.txdata {
-                for txi in &tx.input {
+                for (index, txi) in (&tx.input).iter().enumerate() {
                     if txi.previous_output == self.outpoint {
                         // TODO: there should be only one spending input
                         assert!(confirmed.is_none(), "double spend of {}", self.outpoint);
-                        confirmed = Some((tx.txid(), Height::from_blockhash(blockhash, chain)));
+                        confirmed = Some((
+                            tx.txid(),
+                            index as u32,
+                            Height::from_blockhash(blockhash, chain),
+                        ));
                         return;
                     }
                 }
@@ -666,9 +671,14 @@ impl OutPointStatus {
         Ok(confirmed.or_else(|| {
             let entries = mempool.filter_by_spending(&self.outpoint);
             assert!(entries.len() <= 1, "double spend of {}", self.outpoint);
-            entries
-                .first()
-                .map(|entry| (entry.txid, Height::unconfirmed(entry)))
+            entries.first().map(|entry| {
+                for (index, txi) in entry.tx.input.iter().enumerate() {
+                    if txi.previous_output == self.outpoint {
+                        return (entry.txid, index as u32, Height::unconfirmed(entry));
+                    }
+                }
+                panic!();
+            })
         }))
     }
 }
