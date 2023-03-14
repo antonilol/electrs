@@ -416,7 +416,7 @@ impl ScriptHashStatus {
                 .outputs = funding_outputs;
             cache.add_tx(entry.txid, || entry.tx.clone());
         }
-        for entry in outpoints
+        for (entry, _) in outpoints
             .iter()
             .flat_map(|outpoint| mempool.filter_by_spending(outpoint))
         {
@@ -671,14 +671,9 @@ impl OutPointStatus {
         Ok(confirmed.or_else(|| {
             let entries = mempool.filter_by_spending(&self.outpoint);
             assert!(entries.len() <= 1, "double spend of {}", self.outpoint);
-            entries.first().map(|entry| {
-                for (index, txi) in entry.tx.input.iter().enumerate() {
-                    if txi.previous_output == self.outpoint {
-                        return (entry.txid, index as u32, Height::unconfirmed(entry));
-                    }
-                }
-                panic!();
-            })
+            entries
+                .first()
+                .map(|entry| (entry.0.txid, *entry.1, Height::unconfirmed(entry.0)))
         }))
     }
 }

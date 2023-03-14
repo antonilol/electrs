@@ -29,7 +29,7 @@ pub(crate) struct Entry {
 pub(crate) struct Mempool {
     entries: HashMap<Txid, Entry>,
     by_funding: BTreeSet<(ScriptHash, Txid)>,
-    by_spending: BTreeSet<(OutPoint, Txid)>,
+    by_spending: BTreeSet<(OutPoint, Txid, u32)>,
     fees: FeeHistogram,
     // stats
     vsize: Gauge,
@@ -85,14 +85,14 @@ impl Mempool {
             .collect()
     }
 
-    pub(crate) fn filter_by_spending(&self, outpoint: &OutPoint) -> Vec<&Entry> {
+    pub(crate) fn filter_by_spending(&self, outpoint: &OutPoint) -> Vec<(&Entry, &u32)> {
         let range = (
-            Bound::Included((*outpoint, txid_min())),
-            Bound::Included((*outpoint, txid_max())),
+            Bound::Included((*outpoint, txid_min(), u32::MIN)),
+            Bound::Included((*outpoint, txid_max(), u32::MAX)),
         );
         self.by_spending
             .range(range)
-            .map(|(_, txid)| self.get(txid).expect("missing spending mempool tx"))
+            .map(|(_, txid, vin)| (self.get(txid).expect("missing spending mempool tx"), vin))
             .collect()
     }
 
@@ -149,8 +149,9 @@ impl Mempool {
     }
 
     fn add_entry(&mut self, txid: Txid, tx: Transaction, entry: json::GetMempoolEntryResult) {
-        for txi in &tx.input {
-            self.by_spending.insert((txi.previous_output, txid));
+        for (index, txi) in (&tx.input).iter().enumerate() {
+            self.by_spending
+                .insert((txi.previous_output, txid, index as u32));
         }
         for txo in &tx.output {
             let scripthash = ScriptHash::new(&txo.script_pubkey);
@@ -171,8 +172,9 @@ impl Mempool {
 
     fn remove_entry(&mut self, txid: Txid) {
         let entry = self.entries.remove(&txid).expect("missing tx from mempool");
-        for txi in entry.tx.input {
-            self.by_spending.remove(&(txi.previous_output, txid));
+        for (index, txi) in entry.tx.input.iter().enumerate() {
+            self.by_spending
+                .remove(&(txi.previous_output, txid, index as u32));
         }
         for txo in entry.tx.output {
             let scripthash = ScriptHash::new(&txo.script_pubkey);
