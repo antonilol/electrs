@@ -29,7 +29,7 @@ pub(crate) struct Entry {
 pub(crate) struct Mempool {
     entries: HashMap<Txid, Entry>,
     by_funding: BTreeSet<(ScriptHash, Txid)>,
-    by_spending: BTreeSet<(OutPoint, Txid, u32)>,
+    by_spending: BTreeSet<(OutPoint, Txid, u16)>,
     fees: FeeHistogram,
     // stats
     vsize: Gauge,
@@ -85,10 +85,10 @@ impl Mempool {
             .collect()
     }
 
-    pub(crate) fn filter_by_spending(&self, outpoint: &OutPoint) -> Vec<(&Entry, &u32)> {
+    pub(crate) fn filter_by_spending(&self, outpoint: &OutPoint) -> Vec<(&Entry, &u16)> {
         let range = (
-            Bound::Included((*outpoint, txid_min(), u32::MIN)),
-            Bound::Included((*outpoint, txid_max(), u32::MAX)),
+            Bound::Included((*outpoint, txid_min(), u16::MIN)),
+            Bound::Included((*outpoint, txid_max(), u16::MAX)),
         );
         self.by_spending
             .range(range)
@@ -151,7 +151,7 @@ impl Mempool {
     fn add_entry(&mut self, txid: Txid, tx: Transaction, entry: json::GetMempoolEntryResult) {
         for (index, txi) in (&tx.input).iter().enumerate() {
             self.by_spending
-                .insert((txi.previous_output, txid, index as u32));
+                .insert((txi.previous_output, txid, index as u16));
         }
         for txo in &tx.output {
             let scripthash = ScriptHash::new(&txo.script_pubkey);
@@ -174,7 +174,7 @@ impl Mempool {
         let entry = self.entries.remove(&txid).expect("missing tx from mempool");
         for (index, txi) in entry.tx.input.iter().enumerate() {
             self.by_spending
-                .remove(&(txi.previous_output, txid, index as u32));
+                .remove(&(txi.previous_output, txid, index as u16));
         }
         for txo in entry.tx.output {
             let scripthash = ScriptHash::new(&txo.script_pubkey);

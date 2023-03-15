@@ -555,7 +555,7 @@ fn filter_block_txs<T: Send>(
 pub(crate) struct OutPointStatus {
     outpoint: OutPoint,
     funding: Option<Height>,
-    spending: Option<(Txid, u32, Height)>,
+    spending: Option<(Txid, u16, Height)>,
     tip: BlockHash,
 }
 
@@ -643,7 +643,7 @@ impl OutPointStatus {
         index: &Index,
         daemon: &Daemon,
         mempool: &Mempool,
-    ) -> Result<Option<(Txid, u32, Height)>> {
+    ) -> Result<Option<(Txid, u16, Height)>> {
         let chain = index.chain();
         if !self.is_reorg(chain) {
             if let Some((_, _, Height::Confirmed { .. })) = &self.spending {
@@ -660,7 +660,7 @@ impl OutPointStatus {
                         assert!(confirmed.is_none(), "double spend of {}", self.outpoint);
                         confirmed = Some((
                             tx.txid(),
-                            index as u32,
+                            index as u16,
                             Height::from_blockhash(blockhash, chain),
                         ));
                         return;
