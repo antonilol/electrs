@@ -369,7 +369,12 @@ impl Rpc {
         })
     }
 
-    fn outpoint_status(&self, client: &mut Client, (txid, vout): (Txid, u32), subscribe: bool) -> Result<Value> {
+    fn outpoint_status(
+        &self,
+        client: &mut Client,
+        (txid, vout): (Txid, u32),
+        subscribe: bool,
+    ) -> Result<Value> {
         let outpoint = OutPoint::new(txid, vout);
         Ok(match client.outpoints.entry(outpoint) {
             Entry::Occupied(e) => json!(e.get()),
