@@ -673,7 +673,7 @@ impl OutPointStatus {
             assert!(entries.len() <= 1, "double spend of {}", self.outpoint);
             entries
                 .first()
-                .map(|entry| (entry.0.txid, *entry.1, Height::unconfirmed(entry.0)))
+                .map(|entry| (entry.0.txid, entry.1, Height::unconfirmed(entry.0)))
         }))
     }
 }

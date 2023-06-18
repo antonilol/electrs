@@ -85,14 +85,14 @@ impl Mempool {
             .collect()
     }
 
-    pub(crate) fn filter_by_spending(&self, outpoint: &OutPoint) -> Vec<(&Entry, &u16)> {
+    pub(crate) fn filter_by_spending(&self, outpoint: &OutPoint) -> Vec<(&Entry, u16)> {
         let range = (
             Bound::Included((*outpoint, txid_min(), u16::MIN)),
             Bound::Included((*outpoint, txid_max(), u16::MAX)),
         );
         self.by_spending
             .range(range)
-            .map(|(_, txid, vin)| (self.get(txid).expect("missing spending mempool tx"), vin))
+            .map(|(_, txid, vin)| (self.get(txid).expect("missing spending mempool tx"), *vin))
             .collect()
     }
 
