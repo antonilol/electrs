@@ -131,6 +131,7 @@ pub struct ScriptHashStatus {
     mempool: Vec<TxEntry>,                       // unconfirmed entries
     history: Vec<HistoryEntry>,                  // computed from confirmed and mempool entries
     statushash: Option<StatusHash>,              // computed from history
+    is_used: bool, // if true, there exists a tx sending to this address, used by is_unused
 }
 
 /// Specific scripthash balance
@@ -228,6 +229,7 @@ impl ScriptHashStatus {
             mempool: Vec::new(),
             history: Vec::new(),
             statushash: None,
+            is_used: false,
         }
     }
 
@@ -274,6 +276,10 @@ impl ScriptHashStatus {
 
     pub(crate) fn get_history(&self) -> &[HistoryEntry] {
         &self.history
+    }
+
+    pub(crate) fn is_unused(&self) -> bool {
+        !self.is_used
     }
 
     /// Collect all confirmed history entries (in block order).
@@ -330,12 +336,13 @@ impl ScriptHashStatus {
         daemon: &Daemon,
         cache: &Cache,
         outpoints: &mut HashSet<OutPoint>,
+        stop_after_first_tx: bool,
     ) -> Result<HashMap<BlockHash, Vec<TxEntry>>> {
         let scripthash = self.scripthash;
         let mut result = HashMap::<BlockHash, HashMap<usize, TxEntry>>::new();
 
         let funding_blockhashes = index.limit_result(index.filter_by_funding(scripthash))?;
-        self.for_new_blocks(funding_blockhashes, daemon, |blockhash, block| {
+        let ret = self.for_new_blocks(funding_blockhashes, daemon, |blockhash, block| {
             let block_entries = result.entry(blockhash).or_default();
             filter_block_txs(block, |tx| filter_outputs(tx, scripthash)).for_each(
                 |FilteredTx {
@@ -352,8 +359,15 @@ impl ScriptHashStatus {
                         .outputs = funding_outputs;
                 },
             );
-            ControlFlow::Continue::<()>(())
+            if stop_after_first_tx && !block_entries.is_empty() {
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
         })?;
+        if ret.is_break() {
+            return Ok(HashMap::new());
+        }
+
         let spending_blockhashes: HashSet<BlockHash> = outpoints
             .par_iter()
             .flat_map_iter(|outpoint| index.filter_by_spending(*outpoint))
@@ -398,9 +412,14 @@ impl ScriptHashStatus {
         mempool: &Mempool,
         cache: &Cache,
         outpoints: &mut HashSet<OutPoint>,
+        stop_after_first_tx: bool,
     ) -> Vec<TxEntry> {
         let mut result = HashMap::<Txid, TxEntry>::new();
-        for entry in mempool.filter_by_funding(&self.scripthash) {
+        let funding_entries = mempool.filter_by_funding(&self.scripthash);
+        if stop_after_first_tx && !funding_entries.is_empty() {
+            return Vec::new();
+        }
+        for entry in funding_entries {
             let funding_outputs = filter_outputs(&entry.tx, self.scripthash);
             assert!(!funding_outputs.is_empty());
             outpoints.extend(make_outpoints(entry.txid, &funding_outputs));
@@ -433,12 +452,15 @@ impl ScriptHashStatus {
         mempool: &Mempool,
         daemon: &Daemon,
         cache: &Cache,
+        stop_after_first_tx: bool,
     ) -> Result<()> {
         let mut outpoints: HashSet<OutPoint> = self.confirmed_outpoints(index.chain());
 
         let new_tip = index.chain().tip();
         if self.tip != new_tip {
-            let update = self.sync_confirmed(index, daemon, cache, &mut outpoints)?;
+            let update =
+                self.sync_confirmed(index, daemon, cache, &mut outpoints, stop_after_first_tx)?;
+
             self.confirmed.extend(update);
             self.tip = new_tip;
         }
@@ -448,10 +470,18 @@ impl ScriptHashStatus {
                 self.confirmed.values().map(Vec::len).sum::<usize>(),
                 self.confirmed.len()
             );
+            self.is_used = true;
+            if stop_after_first_tx {
+                return Ok(());
+            }
         }
-        self.mempool = self.sync_mempool(mempool, cache, &mut outpoints);
+        self.mempool = self.sync_mempool(mempool, cache, &mut outpoints, stop_after_first_tx);
         if !self.mempool.is_empty() {
             debug!("{} mempool transactions", self.mempool.len());
+            self.is_used = true;
+            if stop_after_first_tx {
+                return Ok(());
+            }
         }
         self.history.clear();
         self.history

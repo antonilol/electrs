@@ -172,10 +172,12 @@ impl Rpc {
             .scripthashes
             .par_iter_mut()
             .filter_map(|(scripthash, status)| -> Option<Result<Value>> {
-                match self
-                    .tracker
-                    .update_scripthash_status(status, &self.daemon, &self.cache)
-                {
+                match self.tracker.update_scripthash_status(
+                    status,
+                    &self.daemon,
+                    &self.cache,
+                    false,
+                ) {
                     Ok(true) => Some(Ok(notification(
                         "blockchain.scripthash.subscribe",
                         &[json!(scripthash), json!(status.statushash())],
@@ -350,10 +352,31 @@ impl Rpc {
         })
     }
 
+    fn scripthash_is_unused(
+        &self,
+        client: &Client,
+        (scripthash,): &(ScriptHash,),
+    ) -> Result<Value> {
+        let is_unused = match client.scripthashes.get(scripthash) {
+            Some(status) => status.is_unused(),
+            None => {
+                let mut status = ScriptHashStatus::new(*scripthash);
+                self.tracker.update_scripthash_status(
+                    &mut status,
+                    &self.daemon,
+                    &self.cache,
+                    true,
+                )?;
+                status.is_unused()
+            }
+        };
+        Ok(json!(is_unused))
+    }
+
     fn new_status(&self, scripthash: ScriptHash) -> Result<ScriptHashStatus> {
         let mut status = ScriptHashStatus::new(scripthash);
         self.tracker
-            .update_scripthash_status(&mut status, &self.daemon, &self.cache)?;
+            .update_scripthash_status(&mut status, &self.daemon, &self.cache, false)?;
         Ok(status)
     }
 
@@ -556,6 +579,7 @@ impl Rpc {
                 Params::ScriptHashListUnspent(args) => self.scripthash_list_unspent(client, args),
                 Params::ScriptHashSubscribe(args) => self.scripthash_subscribe(client, args),
                 Params::ScriptHashUnsubscribe(args) => self.scripthash_unsubscribe(client, args),
+                Params::ScriptHashIsUnused(args) => self.scripthash_is_unused(client, args),
                 Params::TransactionBroadcast(args) => self.transaction_broadcast(args),
                 Params::TransactionGet(args) => self.transaction_get(args),
                 Params::TransactionGetMerkle(args) => self.transaction_get_merkle(args),
@@ -586,6 +610,7 @@ enum Params {
     ScriptHashListUnspent((ScriptHash,)),
     ScriptHashSubscribe((ScriptHash,)),
     ScriptHashUnsubscribe((ScriptHash,)),
+    ScriptHashIsUnused((ScriptHash,)),
     TransactionGet(TxGetArgs),
     TransactionGetMerkle((Txid, usize)),
     TransactionFromPosition((usize, usize, bool)),
@@ -605,6 +630,7 @@ impl Params {
             "blockchain.scripthash.listunspent" => Params::ScriptHashListUnspent(convert(params)?),
             "blockchain.scripthash.subscribe" => Params::ScriptHashSubscribe(convert(params)?),
             "blockchain.scripthash.unsubscribe" => Params::ScriptHashUnsubscribe(convert(params)?),
+            "blockchain.scripthash.is_unused" => Params::ScriptHashIsUnused(convert(params)?),
             "blockchain.transaction.broadcast" => Params::TransactionBroadcast(convert(params)?),
             "blockchain.transaction.get" => Params::TransactionGet(convert(params)?),
             "blockchain.transaction.get_merkle" => Params::TransactionGetMerkle(convert(params)?),

@@ -84,9 +84,16 @@ impl Tracker {
         status: &mut ScriptHashStatus,
         daemon: &Daemon,
         cache: &Cache,
+        stop_after_first_tx: bool,
     ) -> Result<bool> {
         let prev_statushash = status.statushash();
-        status.sync(&self.index, &self.mempool, daemon, cache)?;
+        status.sync(
+            &self.index,
+            &self.mempool,
+            daemon,
+            cache,
+            stop_after_first_tx,
+        )?;
         Ok(prev_statushash != status.statushash())
     }
 
