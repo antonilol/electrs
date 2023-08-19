@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use bitcoin::{BlockHash, Transaction, Txid};
+use std::ops::ControlFlow;
 
 use crate::{
     cache::Cache,
@@ -100,18 +101,22 @@ impl Tracker {
     ) -> Result<Option<(BlockHash, Transaction)>> {
         // Note: there are two blocks with coinbase transactions having same txid (see BIP-30)
         let blockhashes = self.index.filter_by_txid(txid);
-        let mut result = None;
-        daemon.for_blocks(blockhashes, |blockhash, block| {
+        let result = daemon.for_blocks(blockhashes, |blockhash, block| {
             for tx in block.txdata {
-                if result.is_some() {
-                    return;
-                }
                 if tx.txid() == txid {
-                    result = Some((blockhash, tx));
-                    return;
+                    return ControlFlow::Break((blockhash, tx));
                 }
             }
+            ControlFlow::Continue(())
         })?;
-        Ok(result)
+        Ok(control_flow_break_value(result))
+    }
+}
+
+/// See unstable ControlFlow::break_value (https://github.com/rust-lang/rust/issues/75744)
+fn control_flow_break_value<B, C>(value: ControlFlow<B, C>) -> Option<B> {
+    match value {
+        ControlFlow::Continue(..) => None,
+        ControlFlow::Break(x) => Some(x),
     }
 }

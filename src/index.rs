@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::{Block, BlockHash, OutPoint, Txid};
+use std::ops::ControlFlow;
 
 use crate::{
     chain::{Chain, NewHeader},
@@ -205,6 +206,7 @@ impl Index {
                 index_single_block(blockhash, block, height, &mut batch);
             });
             self.stats.height.set("tip", height as f64);
+            ControlFlow::Continue::<()>(())
         })?;
         let heights: Vec<_> = heights.collect();
         assert!(

@@ -8,6 +8,7 @@ use serde::ser::{Serialize, Serializer};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
+use std::ops::ControlFlow;
 
 use crate::{
     cache::Cache,
@@ -303,10 +304,15 @@ impl ScriptHashStatus {
     }
 
     /// Apply func only on the new blocks (fetched from daemon).
-    fn for_new_blocks<B, F>(&self, blockhashes: B, daemon: &Daemon, func: F) -> Result<()>
+    fn for_new_blocks<B, F, R>(
+        &self,
+        blockhashes: B,
+        daemon: &Daemon,
+        func: F,
+    ) -> Result<ControlFlow<R>>
     where
         B: IntoIterator<Item = BlockHash>,
-        F: FnMut(BlockHash, Block),
+        F: FnMut(BlockHash, Block) -> ControlFlow<R>,
     {
         daemon.for_blocks(
             blockhashes
@@ -346,6 +352,7 @@ impl ScriptHashStatus {
                         .outputs = funding_outputs;
                 },
             );
+            ControlFlow::Continue::<()>(())
         })?;
         let spending_blockhashes: HashSet<BlockHash> = outpoints
             .par_iter()
@@ -367,6 +374,7 @@ impl ScriptHashStatus {
                         .spent = spent_outpoints;
                 },
             );
+            ControlFlow::Continue::<()>(())
         })?;
 
         Ok(result
