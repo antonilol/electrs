@@ -96,6 +96,41 @@ impl IndexResult {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub struct IndexFilter {
+    index_funding: bool,
+    index_spending: bool,
+    index_txid: bool,
+}
+
+impl IndexFilter {
+    pub(crate) fn new(index_funding: bool, index_spending: bool, index_txid: bool) -> Self {
+        Self {
+            index_funding,
+            index_spending,
+            index_txid,
+        }
+    }
+
+    pub(crate) fn index_funding(&self) -> bool {
+        self.index_funding
+    }
+
+    pub(crate) fn index_spending(&self) -> bool {
+        self.index_spending
+    }
+
+    pub(crate) fn index_txid(&self) -> bool {
+        self.index_txid
+    }
+}
+
+impl Default for IndexFilter {
+    fn default() -> Self {
+        Self::new(true, true, true)
+    }
+}
+
 /// Confirmed transactions' address index
 pub struct Index {
     store: DBStore,
@@ -154,35 +189,45 @@ impl Index {
         Ok(result)
     }
 
-    pub(crate) fn filter_by_txid(&self, txid: Txid) -> impl Iterator<Item = BlockHash> + '_ {
-        self.store
-            .iter_txid(TxidRow::scan_prefix(txid))
+    pub(crate) fn filter_by_txid(
+        &self,
+        txid: Txid,
+    ) -> Result<impl Iterator<Item = BlockHash> + '_> {
+        Ok(self
+            .store
+            .iter_txid(TxidRow::scan_prefix(txid))?
             .map(|row| HashPrefixRow::from_db_row(&row).height())
-            .filter_map(move |height| self.chain.get_block_hash(height))
+            .filter_map(move |height| self.chain.get_block_hash(height)))
     }
 
     pub(crate) fn filter_by_funding(
         &self,
         scripthash: ScriptHash,
-    ) -> impl Iterator<Item = BlockHash> + '_ {
-        self.store
-            .iter_funding(ScriptHashRow::scan_prefix(scripthash))
+    ) -> Result<impl Iterator<Item = BlockHash> + '_> {
+        Ok(self
+            .store
+            .iter_funding(ScriptHashRow::scan_prefix(scripthash))?
             .map(|row| HashPrefixRow::from_db_row(&row).height())
-            .filter_map(move |height| self.chain.get_block_hash(height))
+            .filter_map(move |height| self.chain.get_block_hash(height)))
     }
 
     pub(crate) fn filter_by_spending(
         &self,
         outpoint: OutPoint,
-    ) -> impl Iterator<Item = BlockHash> + '_ {
-        self.store
-            .iter_spending(SpendingPrefixRow::scan_prefix(outpoint))
+    ) -> Result<impl Iterator<Item = BlockHash> + '_> {
+        Ok(self
+            .store
+            .iter_spending(SpendingPrefixRow::scan_prefix(outpoint))?
             .map(|row| HashPrefixRow::from_db_row(&row).height())
-            .filter_map(move |height| self.chain.get_block_hash(height))
+            .filter_map(move |height| self.chain.get_block_hash(height)))
+    }
+
+    pub(crate) fn check_spending(&self) -> Result<()> {
+        self.store.check_spending()
     }
 
     // Return `Ok(true)` when the chain is fully synced and the index is compacted.
-    pub(crate) fn sync(&mut self, daemon: &Daemon, exit_flag: &ExitFlag) -> Result<bool> {
+    pub(crate) fn sync(&mut self, daemon: &mut Daemon, exit_flag: &ExitFlag) -> Result<bool> {
         let new_headers = self
             .stats
             .observe_duration("headers", || daemon.get_new_headers(&self.chain))?;
@@ -216,15 +261,16 @@ impl Index {
         Ok(false) // sync is not done
     }
 
-    fn sync_blocks(&mut self, daemon: &Daemon, chunk: &[NewHeader]) -> Result<()> {
+    fn sync_blocks(&mut self, daemon: &mut Daemon, chunk: &[NewHeader]) -> Result<()> {
         let blockhashes: Vec<BlockHash> = chunk.iter().map(|h| h.hash()).collect();
         let mut heights = chunk.iter().map(|h| h.height());
 
         let mut batch = WriteBatch::default();
+        batch.indexed = daemon.index_filter();
         daemon.for_blocks(blockhashes, |_blockhash, block| {
             let height = heights.next().expect("unexpected block");
             self.stats.observe_duration("block", || {
-                index_single_block(block, height).extend(&mut batch)
+                index_single_block(block, height, daemon.index_filter()).extend(&mut batch)
             });
             self.stats.height.set("tip", height as f64);
         })?;
@@ -251,33 +297,53 @@ fn db_rows_size(rows: &[Row]) -> usize {
     rows.iter().map(|key| key.len()).sum()
 }
 
-fn index_single_block(block: Block, height: usize) -> IndexResult {
-    let mut funding_rows = Vec::with_capacity(block.txdata.iter().map(|tx| tx.output.len()).sum());
-    let mut spending_rows = Vec::with_capacity(block.txdata.iter().map(|tx| tx.input.len()).sum());
-    let mut txid_rows = Vec::with_capacity(block.txdata.len());
+fn index_single_block(block: Block, height: usize, filter: IndexFilter) -> IndexResult {
+    let mut funding_rows = Vec::with_capacity(if filter.index_funding() {
+        block.txdata.iter().map(|tx| tx.output.len()).sum()
+    } else {
+        0
+    });
+    let mut spending_rows = Vec::with_capacity(if filter.index_spending() {
+        block.txdata.iter().map(|tx| tx.input.len()).sum()
+    } else {
+        0
+    });
+    let mut txid_rows = Vec::with_capacity(if filter.index_txid() {
+        block.txdata.len()
+    } else {
+        0
+    });
 
     for tx in &block.txdata {
-        txid_rows.push(TxidRow::row(tx.txid(), height));
+        if filter.index_txid() {
+            txid_rows.push(TxidRow::row(tx.txid(), height));
+        }
 
-        funding_rows.extend(
-            tx.output
-                .iter()
-                .filter(|txo| !txo.script_pubkey.is_provably_unspendable())
-                .map(|txo| {
-                    let scripthash = ScriptHash::new(&txo.script_pubkey);
-                    ScriptHashRow::row(scripthash, height)
-                }),
-        );
+        if filter.index_funding() {
+            funding_rows.extend(
+                tx.output
+                    .iter()
+                    .filter(|txo| !txo.script_pubkey.is_provably_unspendable())
+                    .map(|txo| {
+                        let scripthash = ScriptHash::new(&txo.script_pubkey);
+                        ScriptHashRow::row(scripthash, height)
+                    }),
+            );
+        }
 
         if tx.is_coin_base() {
             continue; // coinbase doesn't have inputs
         }
-        spending_rows.extend(
-            tx.input
-                .iter()
-                .map(|txin| SpendingPrefixRow::row(txin.previous_output, height)),
-        );
+
+        if filter.index_spending() {
+            spending_rows.extend(
+                tx.input
+                    .iter()
+                    .map(|txin| SpendingPrefixRow::row(txin.previous_output, height)),
+            );
+        }
     }
+
     IndexResult {
         funding_rows,
         spending_rows,

@@ -13,6 +13,7 @@ use std::path::Path;
 use crate::{
     chain::{Chain, NewHeader},
     config::Config,
+    index::IndexFilter,
     metrics::Metrics,
     p2p::Connection,
     signals::ExitFlag,
@@ -98,6 +99,8 @@ fn rpc_connect(config: &Config) -> Result<Client> {
 pub struct Daemon {
     p2p: Mutex<Connection>,
     rpc: Client,
+    txindex_enabled: bool,
+    index_filter: IndexFilter,
 }
 
 impl Daemon {
@@ -135,13 +138,30 @@ impl Daemon {
             bail!("electrs requires non-pruned bitcoind node");
         }
 
+        // TODO config
+        let txindex_enabled = rpc.get_index_info()?.txindex.is_some();
+        let index_filter = IndexFilter::new(true, true, !txindex_enabled);
+
         let p2p = Mutex::new(Connection::connect(
             config.network,
             config.daemon_p2p_addr,
             metrics,
             config.signet_magic,
         )?);
-        Ok(Self { p2p, rpc })
+        Ok(Self {
+            p2p,
+            rpc,
+            txindex_enabled,
+            index_filter,
+        })
+    }
+
+    pub(crate) fn txindex_enabled(&self) -> bool {
+        self.txindex_enabled
+    }
+
+    pub(crate) fn index_filter(&self) -> IndexFilter {
+        self.index_filter
     }
 
     pub(crate) fn estimate_fee(&self, nblocks: u16) -> Result<Option<Amount>> {

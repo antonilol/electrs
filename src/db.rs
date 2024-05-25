@@ -4,6 +4,8 @@ use electrs_rocksdb as rocksdb;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::index::IndexFilter;
+
 pub(crate) type Row = Box<[u8]>;
 
 #[derive(Default)]
@@ -13,6 +15,7 @@ pub(crate) struct WriteBatch {
     pub(crate) funding_rows: Vec<Row>,
     pub(crate) spending_rows: Vec<Row>,
     pub(crate) txid_rows: Vec<Row>,
+    pub(crate) indexed: IndexFilter,
 }
 
 impl WriteBatch {
@@ -28,6 +31,7 @@ impl WriteBatch {
 pub struct DBStore {
     db: rocksdb::DB,
     bulk_import: AtomicBool,
+    index_filter: IndexFilter,
 }
 
 const CONFIG_CF: &str = "config";
@@ -84,7 +88,7 @@ struct Config {
     format: u64,
 }
 
-const CURRENT_FORMAT: u64 = 0;
+const CURRENT_FORMAT: u64 = 1;
 
 impl Default for Config {
     fn default() -> Self {
@@ -121,7 +125,7 @@ impl DBStore {
             .collect()
     }
 
-    fn open_internal(path: &Path) -> Result<Self> {
+    fn open_internal(path: &Path, index_filter: IndexFilter) -> Result<Self> {
         let mut db_opts = default_opts();
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
@@ -139,6 +143,7 @@ impl DBStore {
         let store = DBStore {
             db,
             bulk_import: AtomicBool::new(true),
+            index_filter,
         };
         Ok(store)
     }
@@ -152,8 +157,8 @@ impl DBStore {
     }
 
     /// Opens a new RocksDB at the specified location.
-    pub fn open(path: &Path, auto_reindex: bool) -> Result<Self> {
-        let mut store = Self::open_internal(path)?;
+    pub fn open(path: &Path, auto_reindex: bool, index_filter: IndexFilter) -> Result<Self> {
+        let mut store = Self::open_internal(path, index_filter)?;
         let config = store.get_config();
         debug!("DB {:?}", config);
         let mut config = config.unwrap_or_default(); // use default config when DB is empty
@@ -161,14 +166,44 @@ impl DBStore {
         let reindex_cause = if store.is_legacy_format() {
             Some("legacy format".to_owned())
         } else if config.format != CURRENT_FORMAT {
-            Some(format!(
-                "unsupported format {} != {}",
-                config.format, CURRENT_FORMAT
-            ))
+            match config.format {
+                0 => {
+                    if let Some(tip) = store
+                        .db
+                        .get_cf(store.headers_cf(), TIP_KEY)
+                        .expect("get_tip failed")
+                    {
+                        let mut opts = rocksdb::WriteOptions::default();
+                        opts.set_sync(true);
+                        opts.disable_wal(false);
+
+                        // move the tip
+                        store
+                            .db
+                            .put_cf_opt(store.config_cf(), TIP_KEY, &tip, &opts)
+                            .unwrap();
+                        store.db.delete_cf(store.headers_cf(), TIP_KEY).unwrap();
+
+                        // set separate tips for each cf in config
+                        for cf_name in [TXID_CF, FUNDING_CF, SPENDING_CF] {
+                            store
+                                .db
+                                .put_cf_opt(store.config_cf(), cf_name, &tip, &opts)
+                                .unwrap();
+                        }
+                    }
+                    config.format = CURRENT_FORMAT;
+                    None
+                }
+                format => Some(format!(
+                    "unsupported format {} != {}",
+                    format, CURRENT_FORMAT
+                )),
+            }
         } else {
             None
         };
-        if let Some(cause) = reindex_cause {
+        if let Some(cause) = &reindex_cause {
             if !auto_reindex {
                 bail!("re-index required due to {}", cause);
             }
@@ -185,7 +220,7 @@ impl DBStore {
                     path.display()
                 )
             })?;
-            store = Self::open_internal(path)?;
+            store = Self::open_internal(path, index_filter)?;
             config = Config::default(); // re-init config after dropping DB
         }
         if config.compacted {
@@ -215,16 +250,43 @@ impl DBStore {
         self.db.cf_handle(HEADERS_CF).expect("missing HEADERS_CF")
     }
 
-    pub(crate) fn iter_funding(&self, prefix: Row) -> impl Iterator<Item = Row> + '_ {
-        self.iter_prefix_cf(self.funding_cf(), prefix)
+    pub(crate) fn iter_funding(&self, prefix: Row) -> Result<impl Iterator<Item = Row> + '_> {
+        self.check_funding()?;
+        Ok(self.iter_prefix_cf(self.funding_cf(), prefix))
     }
 
-    pub(crate) fn iter_spending(&self, prefix: Row) -> impl Iterator<Item = Row> + '_ {
-        self.iter_prefix_cf(self.spending_cf(), prefix)
+    pub(crate) fn iter_spending(&self, prefix: Row) -> Result<impl Iterator<Item = Row> + '_> {
+        self.check_spending()?;
+        Ok(self.iter_prefix_cf(self.spending_cf(), prefix))
     }
 
-    pub(crate) fn iter_txid(&self, prefix: Row) -> impl Iterator<Item = Row> + '_ {
-        self.iter_prefix_cf(self.txid_cf(), prefix)
+    pub(crate) fn iter_txid(&self, prefix: Row) -> Result<impl Iterator<Item = Row> + '_> {
+        self.check_txid()?;
+        Ok(self.iter_prefix_cf(self.txid_cf(), prefix))
+    }
+
+    pub(crate) fn check_funding(&self) -> Result<()> {
+        // TODO also bail if not up to date
+        if !self.index_filter.index_funding() {
+            bail!("no 'funding'");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_spending(&self) -> Result<()> {
+        // TODO also bail if not up to date
+        if !self.index_filter.index_spending() {
+            bail!("no 'spending'");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_txid(&self) -> Result<()> {
+        // TODO also bail if not up to date
+        if !self.index_filter.index_txid() {
+            bail!("no 'txid'");
+        }
+        Ok(())
     }
 
     fn iter_prefix_cf(
@@ -246,14 +308,20 @@ impl DBStore {
         self.db
             .iterator_cf_opt(self.headers_cf(), opts, rocksdb::IteratorMode::Start)
             .map(|row| row.expect("header iterator failed").0) // extract key from row
-            .filter(|key| &key[..] != TIP_KEY) // headers' rows are longer than TIP_KEY
             .collect()
     }
 
     pub(crate) fn get_tip(&self) -> Option<Vec<u8>> {
         self.db
-            .get_cf(self.headers_cf(), TIP_KEY)
+            .get_cf(self.config_cf(), TIP_KEY)
             .expect("get_tip failed")
+    }
+
+    pub(crate) fn get_tip_of(&self, cf: &str) -> Option<Vec<u8>> {
+        assert!([TXID_CF, FUNDING_CF, SPENDING_CF].contains(&cf));
+        self.db
+            .get_cf(self.config_cf(), cf)
+            .expect("get_tip_of failed")
     }
 
     pub(crate) fn write(&self, batch: &WriteBatch) {
@@ -270,7 +338,19 @@ impl DBStore {
         for key in &batch.header_rows {
             db_batch.put_cf(self.headers_cf(), key, b"");
         }
-        db_batch.put_cf(self.headers_cf(), TIP_KEY, &batch.tip_row);
+
+        if self.index_filter == batch.indexed {
+            db_batch.put_cf(self.config_cf(), TIP_KEY, &batch.tip_row);
+        }
+        if self.index_filter.index_funding() {
+            db_batch.put_cf(self.config_cf(), FUNDING_CF, &batch.tip_row);
+        }
+        if self.index_filter.index_spending() {
+            db_batch.put_cf(self.config_cf(), SPENDING_CF, &batch.tip_row);
+        }
+        if self.index_filter.index_txid() {
+            db_batch.put_cf(self.config_cf(), TXID_CF, &batch.tip_row);
+        }
 
         let mut opts = rocksdb::WriteOptions::new();
         let bulk_import = self.bulk_import.load(Ordering::Relaxed);
@@ -364,13 +444,16 @@ mod tests {
     fn test_reindex_new_format() {
         let dir = tempfile::tempdir().unwrap();
         {
-            let store = DBStore::open(dir.path(), false).unwrap();
+            let store = DBStore::open(dir.path(), false, Default::default()).unwrap();
             let mut config = store.get_config().unwrap();
             config.format += 1;
             store.set_config(config);
         };
         assert_eq!(
-            DBStore::open(dir.path(), false).err().unwrap().to_string(),
+            DBStore::open(dir.path(), false, Default::default())
+                .err()
+                .unwrap()
+                .to_string(),
             format!(
                 "re-index required due to unsupported format {} != {}",
                 CURRENT_FORMAT + 1,
@@ -378,7 +461,7 @@ mod tests {
             )
         );
         {
-            let store = DBStore::open(dir.path(), true).unwrap();
+            let store = DBStore::open(dir.path(), true, Default::default()).unwrap();
             store.flush();
             let config = store.get_config().unwrap();
             assert_eq!(config.format, CURRENT_FORMAT);
@@ -396,11 +479,14 @@ mod tests {
             db.put(b"F", b"").unwrap(); // insert legacy DB compaction marker (in 'default' column family)
         };
         assert_eq!(
-            DBStore::open(dir.path(), false).err().unwrap().to_string(),
+            DBStore::open(dir.path(), false, Default::default())
+                .err()
+                .unwrap()
+                .to_string(),
             format!("re-index required due to legacy format",)
         );
         {
-            let store = DBStore::open(dir.path(), true).unwrap();
+            let store = DBStore::open(dir.path(), true, Default::default()).unwrap();
             store.flush();
             let config = store.get_config().unwrap();
             assert_eq!(config.format, CURRENT_FORMAT);
@@ -410,7 +496,7 @@ mod tests {
     #[test]
     fn test_db_prefix_scan() {
         let dir = tempfile::tempdir().unwrap();
-        let store = DBStore::open(dir.path(), true).unwrap();
+        let store = DBStore::open(dir.path(), true, Default::default()).unwrap();
 
         let items: &[&[u8]] = &[
             b"ab",
@@ -428,7 +514,9 @@ mod tests {
             ..Default::default()
         });
 
-        let rows = store.iter_txid(b"abcdefgh".to_vec().into_boxed_slice());
+        let rows = store
+            .iter_txid(b"abcdefgh".to_vec().into_boxed_slice())
+            .unwrap();
         assert_eq!(rows.collect::<Vec<_>>(), to_rows(&items[1..5]));
     }
 

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use bitcoin::{BlockHash, Transaction, Txid};
+use bitcoin::{Transaction, Txid};
+use serde_json::Value;
 
 use crate::{
     cache::Cache,
@@ -7,7 +8,7 @@ use crate::{
     config::Config,
     daemon::Daemon,
     db::DBStore,
-    index::Index,
+    index::{Index, IndexFilter},
     mempool::{FeeHistogram, Mempool},
     metrics::Metrics,
     signals::ExitFlag,
@@ -27,8 +28,8 @@ pub(crate) enum Error {
 }
 
 impl Tracker {
-    pub fn new(config: &Config, metrics: Metrics) -> Result<Self> {
-        let store = DBStore::open(&config.db_path, config.auto_reindex)?;
+    pub fn new(config: &Config, metrics: Metrics, index_filter: IndexFilter) -> Result<Self> {
+        let store = DBStore::open(&config.db_path, config.auto_reindex, index_filter)?;
         let chain = Chain::new(config.network);
         Ok(Self {
             index: Index::load(
@@ -62,7 +63,7 @@ impl Tracker {
         status.get_unspent(self.index.chain())
     }
 
-    pub(crate) fn sync(&mut self, daemon: &Daemon, exit_flag: &ExitFlag) -> Result<bool> {
+    pub(crate) fn sync(&mut self, daemon: &mut Daemon, exit_flag: &ExitFlag) -> Result<bool> {
         let done = self.index.sync(daemon, exit_flag)?;
         if done && !self.ignore_mempool {
             self.mempool.sync(daemon);
@@ -97,21 +98,49 @@ impl Tracker {
         &self,
         daemon: &Daemon,
         txid: Txid,
-    ) -> Result<Option<(BlockHash, Transaction)>> {
-        // Note: there are two blocks with coinbase transactions having same txid (see BIP-30)
-        let blockhashes = self.index.filter_by_txid(txid);
+    ) -> Result<Option<Transaction>> {
+        Ok(if !daemon.index_filter().index_txid() {
+            Some(daemon.get_transaction(&txid, None)?)
+        } else {
+            // Note: there are two blocks with coinbase transactions having same txid (see BIP-30)
+            let blockhashes = self.index.filter_by_txid(txid)?;
+            let mut result = None;
+            daemon.for_blocks(blockhashes, |_blockhash, block| {
+                for tx in block.txdata {
+                    if result.is_some() {
+                        return;
+                    }
+                    if tx.txid() == txid {
+                        result = Some(tx);
+                        return;
+                    }
+                }
+            })?;
+            result
+        })
+    }
+
+    pub(crate) fn lookup_transaction_info(&self, daemon: &Daemon, txid: Txid) -> Result<Value> {
+        // The resulting blockhash will be None if Core has txindex,
+        // the tx can't be found or is in the mempool. This is all
+        // fine for the getrawtransaction rpc
         let mut result = None;
-        daemon.for_blocks(blockhashes, |blockhash, block| {
-            for tx in block.txdata {
-                if result.is_some() {
-                    return;
+        if !daemon.txindex_enabled() {
+            // Note: there are two blocks with coinbase transactions having same txid (see BIP-30)
+            let blockhashes = self.index.filter_by_txid(txid)?;
+            daemon.for_blocks(blockhashes, |blockhash, block| {
+                for tx in block.txdata {
+                    if result.is_some() {
+                        return;
+                    }
+                    if tx.txid() == txid {
+                        result = Some(blockhash);
+                        return;
+                    }
                 }
-                if tx.txid() == txid {
-                    result = Some((blockhash, tx));
-                    return;
-                }
-            }
-        })?;
-        Ok(result)
+            })?;
+        }
+
+        daemon.get_transaction_info(&txid, result)
     }
 }

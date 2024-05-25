@@ -328,7 +328,7 @@ impl ScriptHashStatus {
         let scripthash = self.scripthash;
         let mut result = HashMap::<BlockHash, HashMap<usize, TxEntry>>::new();
 
-        let funding_blockhashes = index.limit_result(index.filter_by_funding(scripthash))?;
+        let funding_blockhashes = index.limit_result(index.filter_by_funding(scripthash)?)?;
         self.for_new_blocks(funding_blockhashes, daemon, |blockhash, block| {
             let block_entries = result.entry(blockhash).or_default();
             filter_block_txs(block, |tx| filter_outputs(tx, scripthash)).for_each(
@@ -347,9 +347,12 @@ impl ScriptHashStatus {
                 },
             );
         })?;
+        // Return an error now before calling filter_by_spending in
+        // a parallel iterator so we can safely unwrap there
+        index.check_spending()?;
         let spending_blockhashes: HashSet<BlockHash> = outpoints
             .par_iter()
-            .flat_map_iter(|outpoint| index.filter_by_spending(*outpoint))
+            .flat_map_iter(|outpoint| index.filter_by_spending(*outpoint).unwrap())
             .collect();
         self.for_new_blocks(spending_blockhashes, daemon, |blockhash, block| {
             let block_entries = result.entry(blockhash).or_default();

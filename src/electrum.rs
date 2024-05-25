@@ -139,9 +139,9 @@ impl Rpc {
             metrics::default_duration_buckets(),
         );
 
-        let tracker = Tracker::new(config, metrics)?;
         let signal = Signal::new();
-        let daemon = Daemon::connect(config, signal.exit_flag(), tracker.metrics())?;
+        let daemon = Daemon::connect(config, signal.exit_flag(), &metrics)?;
+        let tracker = Tracker::new(config, metrics, daemon.index_filter())?;
         let cache = Cache::new(tracker.metrics());
         Ok(Self {
             tracker,
@@ -163,7 +163,7 @@ impl Rpc {
     }
 
     pub fn sync(&mut self) -> Result<bool> {
-        self.tracker.sync(&self.daemon, self.signal.exit_flag())
+        self.tracker.sync(&mut self.daemon, self.signal.exit_flag())
     }
 
     pub fn update_client(&self, client: &mut Client) -> Result<Vec<String>> {
@@ -367,22 +367,14 @@ impl Rpc {
     fn transaction_get(&self, args: &TxGetArgs) -> Result<Value> {
         let (txid, verbose) = args.into();
         if verbose {
-            let blockhash = self
-                .tracker
-                .lookup_transaction(&self.daemon, txid)?
-                .map(|(blockhash, _tx)| blockhash);
-            return self.daemon.get_transaction_info(&txid, blockhash);
+            return self.tracker.lookup_transaction_info(&self.daemon, txid);
         }
         if let Some(tx) = self.cache.get_tx(&txid, |tx| serialize_hex(tx)) {
             return Ok(json!(tx));
         }
         debug!("tx cache miss: txid={}", txid);
         // use internal index to load confirmed transaction without an RPC
-        if let Some(tx) = self
-            .tracker
-            .lookup_transaction(&self.daemon, txid)?
-            .map(|(_blockhash, tx)| tx)
-        {
+        if let Some(tx) = self.tracker.lookup_transaction(&self.daemon, txid)? {
             return Ok(json!(serialize_hex(&tx)));
         }
         // load unconfirmed transaction via RPC
@@ -531,6 +523,7 @@ impl Rpc {
         self.rpc_duration.observe_duration(&call.method, || {
             if self.tracker.status().is_err() {
                 // Allow only a few RPC (for sync status notification) not requiring index DB being compacted.
+                // TODO UnavailableIndex
                 match &call.params {
                     Params::BlockHeader(_)
                     | Params::BlockHeaders(_)
