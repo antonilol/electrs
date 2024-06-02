@@ -125,6 +125,7 @@ pub enum DatabaseType {
     #[default]
     RocksDB,
     ReDB,
+    Sled,
 }
 
 impl FromStr for DatabaseType {
@@ -134,6 +135,7 @@ impl FromStr for DatabaseType {
         Ok(match s {
             "rocksdb" => Self::RocksDB,
             "redb" => Self::ReDB,
+            "sled" => Self::Sled,
             _ => return Err(UnknownDatabaseTypeError(s.to_owned())),
         })
     }
@@ -141,7 +143,7 @@ impl FromStr for DatabaseType {
 
 impl ::configure_me::parse_arg::ParseArgFromStr for DatabaseType {
     fn describe_type<W: fmt::Write>(mut writer: W) -> fmt::Result {
-        write!(writer, "either 'rocksdb' or 'redb'")
+        write!(writer, "either 'rocksdb', 'redb' or 'sled'")
     }
 }
 
@@ -150,6 +152,7 @@ impl fmt::Display for DatabaseType {
         match self {
             Self::RocksDB => write!(f, "rocksdb"),
             Self::ReDB => write!(f, "redb"),
+            Self::Sled => write!(f, "sled"),
         }
     }
 }
