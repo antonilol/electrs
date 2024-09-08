@@ -235,7 +235,7 @@ impl Index {
     }
 }
 
-fn index_single_block(
+pub fn index_single_block(
     block_hash: BlockHash,
     block: SerBlock,
     height: usize,

@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::types::{HashPrefix, SerializedHashPrefixRow, SerializedHeaderRow};
 
-#[derive(Default)]
-pub(crate) struct WriteBatch {
+#[derive(Debug, Default)]
+pub struct WriteBatch {
     pub(crate) tip_row: [u8; 32],
     pub(crate) header_rows: Vec<SerializedHeaderRow>,
     pub(crate) funding_rows: Vec<SerializedHashPrefixRow>,
@@ -16,11 +16,28 @@ pub(crate) struct WriteBatch {
 }
 
 impl WriteBatch {
-    pub(crate) fn sort(&mut self) {
+    pub fn sort(&mut self) {
         self.header_rows.sort_unstable();
         self.funding_rows.sort_unstable();
         self.spending_rows.sort_unstable();
         self.txid_rows.sort_unstable();
+    }
+
+    pub fn stats(&self) -> impl core::fmt::Debug {
+        #[derive(Debug)]
+        struct Stats {
+            headers: usize,
+            funding: usize,
+            spending: usize,
+            txid: usize,
+        }
+
+        Stats {
+            headers: self.header_rows.len(),
+            funding: self.funding_rows.len(),
+            spending: self.spending_rows.len(),
+            txid: self.txid_rows.len(),
+        }
     }
 }
 
@@ -270,7 +287,7 @@ impl DBStore {
             .expect("get_tip failed")
     }
 
-    pub(crate) fn write(&self, batch: &WriteBatch) {
+    pub fn write(&self, batch: &WriteBatch) {
         let mut db_batch = rocksdb::WriteBatch::default();
         for key in &batch.funding_rows {
             db_batch.put_cf(self.funding_cf(), key, b"");
