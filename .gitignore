@@ -6,7 +6,6 @@ _*/
 *~
 *.pyc
 .env
-*.dat
 electrs.toml
 data/
 tests/bitcoin-*
