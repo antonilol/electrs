@@ -12,6 +12,10 @@ pub(crate) struct NewHeader {
 
 impl NewHeader {
     pub(crate) fn from((header, height): (BlockHeader, usize)) -> Self {
+        if height > 200000 {
+            panic!("segfault expected by now");
+        }
+
         Self {
             header,
             hash: header.block_hash(),

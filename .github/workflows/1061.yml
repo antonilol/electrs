@@ -1,0 +1,55 @@
+name: electrs
+
+on:
+  push:
+
+jobs:
+  build:
+    name: Build
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        build-args:
+          [
+            --locked --no-default-features,
+            --locked,
+            --locked --features metrics_process,
+          ]
+        bitcoin_core_version:
+          [
+            "27.1"
+          ]
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Rust
+        run: rustup component add rustfmt clippy
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Remove build-essential
+        run: sudo apt remove build-essential
+
+      - name: Build
+        run: cargo build ${{ matrix.build-args }} --all
+
+      - name: Test
+        run: cargo test  ${{ matrix.build-args }} --all
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Install Bitcoin Core
+        run: |
+          curl https://bitcoincore.org/bin/bitcoin-core-${{ matrix.bitcoin_core_version }}/bitcoin-${{ matrix.bitcoin_core_version }}-x86_64-linux-gnu.tar.gz -o bitcoin-core.tar.gz
+          tar xf bitcoin-core.tar.gz
+          sudo cp -r bitcoin-${{ matrix.bitcoin_core_version }}/* /usr/local
+      - name: Run electrs
+        run: cargo run --release -- --log-filters TRACE --db-dir /tmp/
