@@ -17,7 +17,7 @@ build = "build.rs"
 default = ["metrics", "rocksdb", "lmdb", "redb", "sled", "fjall"]
 metrics = ["prometheus", "tiny_http"]
 metrics_process = ["prometheus/process"]
-rocksdb = ["dep:electrs-rocksdb"]
+rocksdb = ["dep:rust-rocksdb"]
 lmdb = ["dep:heed"]
 redb = ["dep:redb"]
 sled = ["dep:sled"]
@@ -54,8 +54,8 @@ ctrlc = "=3.4.2"
 [target.'cfg(not(windows))'.dependencies]
 signal-hook = "0.3"
 
-[dependencies.electrs-rocksdb]
-version = "0.19.0-e3"
+[dependencies.rust-rocksdb]
+version = "0.27.1"
 optional = true
 
 default-features = false
