@@ -128,6 +128,7 @@ pub enum DatabaseType {
     LMDB,
     ReDB,
     Sled,
+    Fjall,
 }
 
 impl FromStr for DatabaseType {
@@ -139,6 +140,7 @@ impl FromStr for DatabaseType {
             "lmdb" => Self::LMDB,
             "redb" => Self::ReDB,
             "sled" => Self::Sled,
+            "fjall" => Self::Fjall,
             _ => return Err(UnknownDatabaseTypeError(s.to_owned())),
         })
     }
@@ -146,7 +148,10 @@ impl FromStr for DatabaseType {
 
 impl ::configure_me::parse_arg::ParseArgFromStr for DatabaseType {
     fn describe_type<W: fmt::Write>(mut writer: W) -> fmt::Result {
-        write!(writer, "either 'rocksdb', 'lmdb', 'redb' or 'sled'")
+        write!(
+            writer,
+            "either 'rocksdb', 'lmdb', 'redb', 'sled' or 'fjall'"
+        )
     }
 }
 
@@ -157,6 +162,7 @@ impl fmt::Display for DatabaseType {
             Self::LMDB => write!(f, "lmdb"),
             Self::ReDB => write!(f, "redb"),
             Self::Sled => write!(f, "sled"),
+            Self::Fjall => write!(f, "fjall"),
         }
     }
 }
