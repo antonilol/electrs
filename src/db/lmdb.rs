@@ -18,6 +18,9 @@ const TIP_KEY: u8 = b'T';
 
 const CURRENT_FORMAT: u64 = 0;
 
+// TODO fix
+// field 0 is used in the generated drop code
+#[allow(dead_code)]
 pub struct RowKeyIter<'a, const N: usize>(RoTxn<'static>, heed::RoPrefix<'a, Bytes, Unit>);
 
 impl<const N: usize> Iterator for RowKeyIter<'_, N> {
@@ -28,6 +31,7 @@ impl<const N: usize> Iterator for RowKeyIter<'_, N> {
     }
 }
 
+#[allow(dead_code)]
 pub struct HeaderIter<'a>(RoTxn<'static>, heed::RoIter<'a, Bytes, Unit>);
 
 impl Iterator for HeaderIter<'_> {
@@ -118,7 +122,10 @@ impl Database for DBStore {
 
         let iter = self
             .headers
-            .iter(unsafe { &*(&rtxn as *const RoTxn) })
+            .iter(
+                // TODO fix
+                unsafe { &*(&rtxn as *const RoTxn) },
+            )
             .unwrap();
 
         HeaderIter(rtxn, iter)
@@ -239,7 +246,11 @@ impl DBStore {
         let rtxn = self.env.clone().static_read_txn().unwrap();
 
         let iter = db
-            .prefix_iter(unsafe { &*(&rtxn as *const RoTxn) }, &prefix)
+            .prefix_iter(
+                // TODO fix
+                unsafe { &*(&rtxn as *const RoTxn) },
+                &prefix,
+            )
             .unwrap();
 
         RowKeyIter(rtxn, iter)
