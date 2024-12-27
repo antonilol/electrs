@@ -78,7 +78,7 @@ impl Database for DBStore {
         }
 
         this.set_config_value(FORMAT_KEY, CURRENT_FORMAT.to_be_bytes())
-            .expect("redb write error");
+            .expect("fjall write error");
         Ok(this)
     }
 
@@ -138,8 +138,26 @@ impl Database for DBStore {
             .expect("failed to flush");
     }
 
-    fn update_metrics(&self, _gauge: &crate::metrics::Gauge) {
-        // TODO
+    fn update_metrics(&self, gauge: &crate::metrics::Gauge) {
+        gauge.set("fjall.disk_space", self.keyspace.disk_space() as f64);
+        gauge.set(
+            "fjall.write_buffer_size",
+            self.keyspace.write_buffer_size() as f64,
+        );
+        gauge.set("fjall.journal_count", self.keyspace.journal_count() as f64);
+
+        for table in [
+            &self.config,
+            &self.headers,
+            &self.funding,
+            &self.spending,
+            &self.txid,
+        ] {
+            gauge.set(
+                &format!("fjall.table_disk_space:{}", table.name),
+                table.disk_space() as f64,
+            );
+        }
     }
 }
 
