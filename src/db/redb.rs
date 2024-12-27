@@ -21,7 +21,7 @@ const CURRENT_FORMAT: u64 = 0;
 
 pub struct RowKeyIter<'a, const N: usize>(redb::Range<'a, [u8; N], ()>);
 
-impl<'a, const N: usize> Iterator for RowKeyIter<'a, N> {
+impl<const N: usize> Iterator for RowKeyIter<'_, N> {
     type Item = [u8; N];
 
     fn next(&mut self) -> Option<Self::Item> {

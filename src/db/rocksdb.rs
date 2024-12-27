@@ -263,15 +263,15 @@ impl DBStore {
         cf: &rocksdb::ColumnFamily,
         readopts: rocksdb::ReadOptions,
         prefix: Option<HashPrefix>,
-    ) -> DBIterator<'a, N> {
+    ) -> DBIterator<'_, N> {
         DBIterator::new(self.db.raw_iterator_cf_opt(cf, readopts), prefix)
     }
 
-    fn iter_prefix_cf<'a>(
-        &'a self,
+    fn iter_prefix_cf(
+        &self,
         cf: &rocksdb::ColumnFamily,
         prefix: HashPrefix,
-    ) -> DBIterator<'a, HASH_PREFIX_ROW_SIZE> {
+    ) -> DBIterator<'_, HASH_PREFIX_ROW_SIZE> {
         let mut opts = rocksdb::ReadOptions::default();
         opts.set_prefix_same_as_start(true); // requires .set_prefix_extractor() above.
         self.iter_cf(cf, opts, Some(prefix))
@@ -443,7 +443,7 @@ impl Drop for DBStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{rocksdb, DBStore, WriteBatch, CURRENT_FORMAT};
+    use super::{rocksdb, DBStore, CURRENT_FORMAT};
     use std::ffi::{OsStr, OsString};
     use std::path::Path;
 

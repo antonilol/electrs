@@ -20,7 +20,7 @@ const CURRENT_FORMAT: u64 = 0;
 
 pub struct RowKeyIter<'a, const N: usize>(RoTxn<'static>, heed::RoPrefix<'a, Bytes, Unit>);
 
-impl<'a, const N: usize> Iterator for RowKeyIter<'a, N> {
+impl<const N: usize> Iterator for RowKeyIter<'_, N> {
     type Item = [u8; N];
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -30,7 +30,7 @@ impl<'a, const N: usize> Iterator for RowKeyIter<'a, N> {
 
 pub struct HeaderIter<'a>(RoTxn<'static>, heed::RoIter<'a, Bytes, Unit>);
 
-impl<'a> Iterator for HeaderIter<'a> {
+impl Iterator for HeaderIter<'_> {
     type Item = SerializedHeaderRow;
 
     fn next(&mut self) -> Option<Self::Item> {
